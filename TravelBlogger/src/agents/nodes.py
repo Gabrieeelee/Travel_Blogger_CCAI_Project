@@ -494,13 +494,21 @@ def recap(state: BloggerState):
                 raw_data_string += f"[{idx+1}] {testo_pulito[:8000]}...\n"
 
     if topic_type == "itinerary":
-        format_instructions = "- STRUTTURA: Itinerario multi-tappa. Struttura i dati cronologicamente per coprire più tappe, con sezioni distinte e dettagliate per ogni singola giornata o città."
+        format_instructions = (
+            "- STRUTTURA: Itinerario multi-tappa. Struttura i dati cronologicamente per coprire più tappe, con sezioni distinte e dettagliate per ogni singola giornata o città.\n"
+            "- **DETTAGLI OBBLIGATORI**: Per ogni tappa, devi includere tutti i dati storici, culturali, architettonici e logistici disponibili (date, nomi, prezzi, orari, distanze)."
+        )
     elif topic_type == "review":
-        format_instructions = "- STRUTTURA: Recensione iper-verticale. Concentrati ESCLUSIVAMENTE sui dettagli iper-locali di una singola struttura (hotel, ristorante, attrazione). I campi 'attractions' devono diventare i servizi offerti (es. 'Piscina', 'Spa', 'Wi-Fi'), e 'practical_info' includerà prezzi esatti, orari di check-in/out e politiche interne."
+        format_instructions = (
+            "- STRUTTURA: Recensione iper-verticale. Concentrati ESCLUSIVAMENTE sui dettagli iper-locali di una singola struttura (hotel, ristorante, attrazione). I campi 'attractions' devono diventare i servizi offerti (es. 'Piscina', 'Spa', 'Wi-Fi'), e 'practical_info' includerà prezzi esatti, orari di check-in/out e politiche interne.\n"
+            "- **DETTAGLI OBBLIGATORI**: Includi tutti i numeri, le date di costruzione, le recensioni citate, i prezzi esatti."
+        )
     else:
-        # Default per "guide"
-        format_instructions = "- STRUTTURA: Guida generale. Struttura il dossier come un reportage ampio sulla destinazione, organizzando in modo chiaro le informazioni su storia, cultura, attrazioni principali e logistica generale."
-
+        format_instructions = (
+            "- STRUTTURA: Guida generale. Struttura il dossier come un reportage ampio sulla destinazione, organizzando in modo chiaro le informazioni su storia, cultura, attrazioni principali e logistica generale.\n"
+            "- **DETTAGLI OBBLIGATORI**: Per ogni attrazione o tema, includi TUTTI i dati storici, architettonici e numerici disponibili nelle fonti."
+        )
+        
     system_prompt = f"""Sei un Data Analyst senior e Capo Analista per un'autorevole Guida Turistica sul Giappone.
     Il tuo compito è trasformare i dati grezzi dei tool (RAG, Web, KG) in un dossier strutturato e iper-dettagliato in formato JSON.
 
@@ -513,25 +521,22 @@ def recap(state: BloggerState):
     DATI GREZZI ESTRATTI (da tool web, RAG e ricerche):
     {raw_data_string}
 
-    REGOLE CRITICHE PER LA DISTILLAZIONE E L'ESTRAZIONE (SEGUIRE IN ORDINE DI PRIORITÀ):
+    REGOLE CRITICHE PER LA DISTILLAZIONE (SEGUIRE IN ORDINE DI PRIORITÀ):
 
-    1. **ADATTAMENTO DEL FORMATO AL TIPO DI POST ({topic_type.upper()})**:
+    1. **PRESERVAZIONE INTEGRALE DEI DETTAGLI FATTUALI (LA REGOLA PIÙ IMPORTANTE)**
+    - **NON DEVI MAI FARE SINTESI.** Il tuo compito è una **riformattazione pulita** dei dati, mantenendo **TUTTI** i dettagli concreti: date, nomi di persone/imperatori/fondatori, eventi storici, dimensioni, altezze, materiali, prezzi esatti, orari di apertura/chiusura, durate, leggende, curiosità, nomi di linee ferroviarie, tariffe, distanze.
+    - I campi testuali (`text` o `description`) **DEVONO essere lunghi e densi** (almeno 150-200 parole) e includere tutti i dettagli sopra.
+
+    2. **ADATTAMENTO DEL FORMATO AL TIPO DI POST ({topic_type.upper()})**:
     {format_instructions}
-
-    2. **DIVIETO DI SINTESI ESTREMA E PRESERVAZIONE DEI DETTAGLI**:
-    - **NON** fare MAI riassunti telegrafici. La tua 'distillazione' è una riformattazione pulita dei dati, ma con la STESSA ricchezza narrativa.
-    - I campi testuali lunghi (`text` o `description`) DEVONO essere corposi (almeno 100-150 parole) e includere aneddoti storici, curiosità culturali e dettagli visivi prelevati dai dati grezzi.
-    - Per QUALSIASI attrazione, tappa o guida, il dossier DEVE contenere dati pratici o numerici specifici prelevati dai testi (es. prezzo esatto del biglietto, orari di apertura, durata di un tragitto, nomi di linee ferroviarie, tariffe). È severamente vietato omettere questi dettagli se presenti nei dati grezzi.
 
     3. **CAMPI OBBLIGATORI E STRUTTURA**:
     - **DIVIETO DI OMISSIONE**: Non omettere MAI chiavi previste dallo schema. Se per il focus dell'articolo non trovi informazioni per una specifica sezione, DEVI comunque generare la chiave inserendo "Nessuna informazione rilevante" e lasciando vuota la lista delle fonti.
     - `fact_checks`: popola questo campo se noti informazioni contrastanti tra le fonti; riporta brevemente la discrepanza e indica quale versione hai scelto.
-    - `attractions` e `practical_info`: devono essere liste di oggetti esatti, con i campi richiesti.
 
     4. **ASSOCIAZIONE RIGOROSA DELLE FONTI E ANTI-ALLUCINAZIONE**:
     - **NON** scrivere mai manualmente "[Fonte: URL]" all'interno dei testi descrittivi (`text`, `description`, `detail`). Usa **ESCLUSIVAMENTE** gli appositi campi `source_url` o `source_urls` previsti nei sottomodelli.
     - Ogni URL inserito DEVE essere esattamente quello da cui hai tratto l'informazione. Se metti l'URL di Tokyo su un dato di Osaka, fallirai il compito.
-    - Se un'informazione proviene dal Knowledge Graph, scrivi **"Knowledge Graph"** nel campo `source_url`.
     - **DIVIETO ASSOLUTO**: Se non hai un URL preciso o non trovi l'informazione, non inventarla.
 
     5. **STILE NARRATIVO**:
@@ -774,7 +779,15 @@ def drafter_node(state: BloggerState):
         - ENTAILMENT: Usa queste informazioni con assoluta sicurezza.
     - **DIVIETO ASSOLUTO**: Non puoi assolutamente inventare o aggiungere dati numerici, storici, architettonici o di qualsiasi tipo che non siano presenti nel Dossier di Ricerca.
     - **SE USI UN DATO DEL DOSSIER**: Ogni dato che riporti (prezzi, orari, misure, date) DEVE essere presente nel dossier. Se nel dossier c'è scritto "il biglietto costa 500 yen", puoi scriverlo. Se non c'è, non puoi inventarlo.
-
+    ### DIVIETO DI DATI SPECIFICI (OBBLIGATORIO):
+    - **NON** puoi assolutamente utilizzare la tua conoscenza per aggiungere:
+    - Date di fondazione (es. "778 d.C.").
+    - Nomi di fondatori o figure storiche (es. "Sakanoue no Tamuramaro").
+    - Misure (es. "13 metri", "15 metri").
+    - Prezzi, orari, tariffe (es. "costa 500 yen").
+    - Dettagli architettonici specifici (es. "139 pilastri").
+    - TUTTI questi dati DEVONO essere presenti nel Dossier di Ricerca. Se non ci sono, **NON SCRIVERLI**.
+    - Se il dossier è carente, puoi scrivere "Il tempio, la cui storia si perde nei secoli..." ma **NON** inventare.
    ### 5. STILE DELLE CITAZIONI E LINK IPERTESTUALI (OBBLIGATORIO)
     - È ASSOLUTAMENTE VIETATO usare il formato testuale crudo [Fonte: URL]. Questo distrugge l'immersione narrativa.
     - **DEVI** trasformare OGNI URL presente nei campi `source_url` o `source_urls` del dossier in un link ipertestuale markdown.
