@@ -32,7 +32,8 @@ _processed_urls = set()
 _banned_domains = [
     "booking.com", "agoda.com", "tripadvisor", "expedia.com", 
     "airbnb.com", "trivago.com", "hotels.com", "skyscanner", 
-    "kayak.com", "getyourguide.com", "klook.com", "viator.com", "japanican.com"
+    "kayak.com", "getyourguide.com", "klook.com", "viator.com", "japanican.com",
+    "trip.com", "insiemeintour.it", "travel365.it", "turismo-giappone.it"
 ]
 
 def is_valid_content(text: str) -> bool:
@@ -86,7 +87,7 @@ def advanced_web_research(query: str) -> str:
         
         tavily_score = res.get("score", 0.0)
         if tavily_score < TAVILY_SCORE_THRESHOLD:
-            print(f"[Scraper Tool] ⛔ Scartato (rilevanza Tavily troppo bassa: {tavily_score:.2f} < {TAVILY_SCORE_THRESHOLD}): {url}")
+            print(f"[Scraper Tool] Scartato (rilevanza Tavily troppo bassa: {tavily_score:.2f} < {TAVILY_SCORE_THRESHOLD}): {url}")
             _processed_urls.add(url)
             continue
         if not url or url in _processed_urls:

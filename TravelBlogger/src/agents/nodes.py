@@ -316,12 +316,18 @@ def research_warmup_node(state: BloggerState):
        - Per gli hotel/strutture: Tariffe medie per notte, orari check-in, servizi inclusi, distanza a piedi dalle stazioni.
        - Per i trasporti: Costo esatto del biglietto, validità dei pass (es. JR Pass), tempi di percorrenza.
 
-    2. STRATEGIA K-RAG (OBBLIGATORIO): 
-       Chiama il `rag_retrieval_tool`. Quando formuli la stringa di ricerca, NON cercare semplicemente "{topic}". Espandi la query usando i dati del Knowledge Graph qui sopra (es. inserisci il nome della prefettura, le attrazioni vicine o i festival) e aggiungi keyword legate all'angle '{angle}' e a termini come "prezzi", "orari", "consigli".
-    
-    3. RICERCA WEB E LOOP RAG (advanced_web_research):
-       Usala SOLO se i documenti nel database RAG locale non sono sufficienti per l'angle '{angle}' e i dettagli pratici. 
-       ATTENZIONE AL LOOP: Questo tool salva segretamente i dati nel database RAG. Di conseguenza, ogni volta che usi la ricerca web, l'azione immediatamente successiva DEVE ESSERE una nuova chiamata a `rag_retrieval_tool` per poter leggere ciò che è stato appena scaricato.
+   2. STRATEGIA DELLE QUERY (DIVIETO DI KEYWORD SOUP):
+       È ASSOLUTAMENTE VIETATO inviare query sature con decine di concetti o città diverse (es. "Kyoto, Osaka, Nara, storia, prezzi, orari"). 
+       I database vettoriali e i motori di ricerca falliscono con query del genere. DEVI fare ricerche ATOMICHE, MIRATE e SEPARATE.
+       - Sbagliato: rag_retrieval_tool("Kyoto, Osaka, storia, prezzi, orari")
+       - Corretto 1 (Ricerca Storica): rag_retrieval_tool("Storia, architettura e leggende del tempio Kiyomizu-dera a Kyoto")
+       - Corretto 2 (Ricerca Logistica): advanced_web_research("Costo biglietto e orario apertura Castello di Osaka")
+       - Coorretto 3 (Ricerca Gastronomica): rag_retrieval_tool("Ristoranti tipici di Kyoto con piatti a base di tofu e fascia di prezzo 2000-4000 yen")
+       Fai una chiamata ai tool per ogni singola città o singola attrazione. Separa le ricerche!
+
+    3. STRATEGIA K-RAG E LOOP WEB: 
+       Chiama il `rag_retrieval_tool` usando query ATOMICHE (vedi punto 2). Espandi le query usando i nomi specifici delle attrazioni o dei festival trovati nel Knowledge Graph. 
+       Se il RAG non trova dettagli sufficienti, usa `advanced_web_research` con la stessa logica mirata. Ricorda: ogni volta che usi la ricerca web, l'azione immediatamente successiva DEVE ESSERE una nuova chiamata a `rag_retrieval_tool` per leggere il testo appena scaricato.
     
     4. LOGISTICA E ITINERARI (travel_route_tool):
        Se '{topic}' è un itinerario con più città, DEVI usare questo tool per calcolare tempi e distanze dei treni.
@@ -495,8 +501,8 @@ def recap(state: BloggerState):
         # Default per "guide"
         format_instructions = "- STRUTTURA: Guida generale. Struttura il dossier come un reportage ampio sulla destinazione, organizzando in modo chiaro le informazioni su storia, cultura, attrazioni principali e logistica generale."
 
-    system_prompt = f"""Sei il Capo Analista per un'autorevole Guida Turistica sul Giappone.
-    Devi distillare i frammenti grezzi estraendo i dati in una struttura JSON rigorosa.
+    system_prompt = f"""Sei un Data Analyst senior e Capo Analista per un'autorevole Guida Turistica sul Giappone.
+    Il tuo compito è trasformare i dati grezzi dei tool (RAG, Web, KG) in un dossier strutturato e iper-dettagliato in formato JSON.
 
     OBIETTIVO: Meta: '{topic}' | Formato: '{topic_type}' | Taglio (Angle): '{angle}'
     {f"VINCOLO TEMPORALE CRITICO: L'itinerario DEVE essere strutturato ESATTAMENTE su {duration}." if duration else ""}
@@ -507,30 +513,30 @@ def recap(state: BloggerState):
     DATI GREZZI ESTRATTI (da tool web, RAG e ricerche):
     {raw_data_string}
 
-    REGOLE CRITICHE PER LA DISTILLAZIONE (SEGUIRE IN ORDINE):
+    REGOLE CRITICHE PER LA DISTILLAZIONE E L'ESTRAZIONE (SEGUIRE IN ORDINE DI PRIORITÀ):
 
     1. **ADATTAMENTO DEL FORMATO AL TIPO DI POST ({topic_type.upper()})**:
     {format_instructions}
 
-    2. **CAMPI OBBLIGATORI E STRUTTURA**:
+    2. **DIVIETO DI SINTESI ESTREMA E PRESERVAZIONE DEI DETTAGLI**:
+    - **NON** fare MAI riassunti telegrafici. La tua 'distillazione' è una riformattazione pulita dei dati, ma con la STESSA ricchezza narrativa.
+    - I campi testuali lunghi (`text` o `description`) DEVONO essere corposi (almeno 100-150 parole) e includere aneddoti storici, curiosità culturali e dettagli visivi prelevati dai dati grezzi.
+    - Per QUALSIASI attrazione, tappa o guida, il dossier DEVE contenere dati pratici o numerici specifici prelevati dai testi (es. prezzo esatto del biglietto, orari di apertura, durata di un tragitto, nomi di linee ferroviarie, tariffe). È severamente vietato omettere questi dettagli se presenti nei dati grezzi.
+
+    3. **CAMPI OBBLIGATORI E STRUTTURA**:
     - **DIVIETO DI OMISSIONE**: Non omettere MAI chiavi previste dallo schema. Se per il focus dell'articolo non trovi informazioni per una specifica sezione, DEVI comunque generare la chiave inserendo "Nessuna informazione rilevante" e lasciando vuota la lista delle fonti.
     - `fact_checks`: popola questo campo se noti informazioni contrastanti tra le fonti; riporta brevemente la discrepanza e indica quale versione hai scelto.
-    - `attractions` e `practical_info`: devono essere liste di oggetti esatti.
-        - Per `attractions`: {{"name": "...", "description": "...", "source_url": "..."}}
-        - Per `practical_info`: {{"detail": "...", "source_url": "..."}}
+    - `attractions` e `practical_info`: devono essere liste di oggetti esatti, con i campi richiesti.
 
-    3. **RISOLUZIONE ALLUCINAZIONI SULLE FONTI (CRITICO)**:
-    - **NON** scrivere mai manualmente "[Fonte: URL]" all'interno dei testi descrittivi (`text`, `description`, `detail`).
-    - Usa **ESCLUSIVAMENTE** gli appositi campi `source_url` o `source_urls` previsti nei sottomodelli.
+    4. **ASSOCIAZIONE RIGOROSA DELLE FONTI E ANTI-ALLUCINAZIONE**:
+    - **NON** scrivere mai manualmente "[Fonte: URL]" all'interno dei testi descrittivi (`text`, `description`, `detail`). Usa **ESCLUSIVAMENTE** gli appositi campi `source_url` o `source_urls` previsti nei sottomodelli.
     - Ogni URL inserito DEVE essere esattamente quello da cui hai tratto l'informazione. Se metti l'URL di Tokyo su un dato di Osaka, fallirai il compito.
     - Se un'informazione proviene dal Knowledge Graph, scrivi **"Knowledge Graph"** nel campo `source_url`.
+    - **DIVIETO ASSOLUTO**: Se non hai un URL preciso o non trovi l'informazione, non inventarla.
 
-    4. **STILE NARRATIVO**:
+    5. **STILE NARRATIVO**:
     - Il campo `text` (o `description`) deve rimanere narrativo, lungo e discorsivo, ma **privo di link testuali** al suo interno.
 
-    5. **ASSOCIAZIONE RIGOROSA (RICONTROLLO)**:
-    - Verifica mentalmente: "Da quale fonte (URL o KG) proviene questo dato?" e assegna il `source_url` di conseguenza. 
-    
     Ora, procedi con la distillazione. Restituisci esclusivamente il JSON strutturato secondo le specifiche sopra, senza ulteriori commenti.
     """
 
@@ -642,7 +648,7 @@ def recap(state: BloggerState):
 
 
 def fact_checking_node(state: BloggerState):
-    print("\n--- 🕵️ NODO: FACT CHECKING STRUTTURATO ---")
+    print("\n--- NODO: FACT CHECKING STRUTTURATO ---")
     
     riassunto = state.get("research_summary", "")
     
@@ -652,7 +658,7 @@ def fact_checking_node(state: BloggerState):
     from langchain_groq import ChatGroq
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
     structured_llm = llm.with_structured_output(ExtractedClaims)
-    MAX_CLAIMS = 10
+    MAX_CLAIMS = 4
     system_prompt = f"""Sei un revisore editoriale specializzato in fact-checking per una Guida Turistica.
     Il tuo compito è estrarre TUTTE le affermazioni fattuali (claims) più importanti dal testo fornito.
     
@@ -727,7 +733,6 @@ def drafter_node(state: BloggerState):
     print(f"    [Drafter] Scrittura bozza in corso su: '{topic}' (Tipo: {topic_type} | Angle: {angle})")
 
 
-    # 2. Definisci le regole di formattazione specifiche per il tipo di articolo
     if topic_type == "itinerary":
         format_rules = f"""
     - STRUTTURA A GIORNATE: L'itinerario DEVE svilupparsi ESATTAMENTE su {duration if duration else 'le giornate indicate nel dossier'}. Scrivi un itinerario scandito giorno per giorno usando i tag H2 (es. '## Giorno 1: Esplorando Tokyo'). 
@@ -744,7 +749,6 @@ def drafter_node(state: BloggerState):
     - SHOW, DON'T TELL: Potenzia ulteriormente la descrizione sensoriale. Trasforma i dati freddi in esperienze vissute. Descrivi l'architettura, i sapori e l'atmosfera.
     - TONO: Evocativo, confidenziale ma autorevole. Trasporta il lettore fisicamente sul posto."""
 
-    # 3. Costruisci il System Prompt
     system_prompt = f"""Sei un Travel Blogger d'élite e un narratore viscerale, in stile reportage narrativo. Non scrivi voci enciclopediche o riassunti asettici: tu scrivi racconti di viaggio immersivi che trasportano il lettore fisicamente sul posto.
     Il tuo compito è scrivere l'articolo finale unendo i dati del Dossier a uno storytelling coinvolgente e di altissima qualità.
 
@@ -763,17 +767,22 @@ def drafter_node(state: BloggerState):
     ### 3. GUIDA DI STILE E STRUTTURA PER TIPOLOGIA DI ARTICOLO ({topic_type.upper()})
     {format_rules}
 
-    ### 4. GESTIONE DEL FACT-CHECKING (CRITICO)
-    Devi allinearti rigorosamente al "Report di Fact-Checking" fornito:
-    - CONTRADDIZIONE: È assolutamente vietato inserire nel testo queste informazioni. Ignorale.
-    - NEUTRO: Tratta con cautela, usando un tono dubitativo ("si dice che...", "le leggende narrano...").
-    - ENTAILMENT: Usa queste informazioni con assoluta sicurezza.
+    ### 4. GESTIONE DEL FACT-CHECKING E DIVIETO DI ALLUCINAZIONI (CRITICO)
+    -Devi allinearti rigorosamente al "Report di Fact-Checking" fornito:
+        - CONTRADDIZIONE: È assolutamente vietato inserire nel testo queste informazioni. Ignorale.
+        - NEUTRO: Tratta con cautela, usando un tono dubitativo ("si dice che...", "le leggende narrano...").
+        - ENTAILMENT: Usa queste informazioni con assoluta sicurezza.
+    - **DIVIETO ASSOLUTO**: Non puoi assolutamente inventare o aggiungere dati numerici, storici, architettonici o di qualsiasi tipo che non siano presenti nel Dossier di Ricerca.
+    - **SE USI UN DATO DEL DOSSIER**: Ogni dato che riporti (prezzi, orari, misure, date) DEVE essere presente nel dossier. Se nel dossier c'è scritto "il biglietto costa 500 yen", puoi scriverlo. Se non c'è, non puoi inventarlo.
 
-    ### 5. STILE DELLE CITAZIONI (CRITICO)
+   ### 5. STILE DELLE CITAZIONI E LINK IPERTESTUALI (OBBLIGATORIO)
     - È ASSOLUTAMENTE VIETATO usare il formato testuale crudo [Fonte: URL]. Questo distrugge l'immersione narrativa.
-    - Devi nascondere gli URL all'interno del testo usando i collegamenti ipertestuali nativi del Markdown. Esempio: "Il costo del biglietto per il [Museo della Pace](https://www.hiroshima-pcf.or.jp/) è di 200 yen."
-    - Se vedi il tag [Fonte: Nessuna], scrivi normalmente senza inserire alcun link. Se la fonte è il Knowledge Graph, non linkare nulla.
-
+    - **DEVI** trasformare OGNI URL presente nei campi `source_url` o `source_urls` del dossier in un link ipertestuale markdown.
+    - Regola: per ogni attrazione, tappa o informazione pratica che ha un `source_url`, devi creare un link testuale significativo. Ad esempio:
+    - Se il dossier dice: `"source_url": "https://www.viaggieritratti.it/kiyomizudera"` per Kiyomizu-dera, nel testo scriverai: `[Kiyomizu-dera](https://www.viaggieritratti.it/kiyomizudera)` o `[sito ufficiale di Kiyomizu-dera](https://www.viaggieritratti.it/kiyomizudera)`.
+    - Se un'informazione proviene da "Knowledge Graph", non linkare nulla.
+    - **NON** inserire mai URL nudi o tra parentesi quadre senza descrizione.
+    
     ### 6. IMPAGINAZIONE VISIVA (CLIP)
     - DEVI distribuire 2 o 3 immagini ALL'INTERNO del testo per spezzare i paragrafi.
     - È SEVERAMENTE VIETATO raggruppare o inserire tutti i segnaposti alla fine dell'articolo!
@@ -784,7 +793,6 @@ def drafter_node(state: BloggerState):
     - Per evitare un testo superficiale, esplora ogni tema, tappa o attrazione con almeno 2 paragrafi corposi, unendo la narrativa (atmosfera) ai dati del dossier (storia, prezzi, logistica).
     """
 
-    # 4. Aggiorna il Contesto Dinamico
     dynamic_context = f"""
     ### CONTESTO EDITORIALE
     - **Argomento Principale**: {topic}
