@@ -160,13 +160,13 @@ class Neo4jKGManager:
             result = session.run(query, name=spot_name)
             return [record.data() for record in result]
         
-    def query(self, entity_name: str) -> dict:
-        """
-        Scheda completa per nome.
-        """
-        entities = self.get_entities_for_krag(entity_name)
-        posts = self.check_existing_posts(entity_name)
-        return {"krag_context": entities, "editorial_history": posts}
+    #def query(self, entity_name: str) -> dict:
+     #   """
+    #    Scheda completa per nome.
+   #     """
+  #      entities = self.get_entities_for_krag(entity_name)
+ #       posts = self.check_existing_posts(entity_name)
+#        return {"krag_context": entities, "editorial_history": posts}
     
     def update_after_approval(self, post_data: dict, extracted_entities: dict):
         query = """
@@ -358,7 +358,7 @@ class Neo4jKGManager:
             return rec["canonical_name"], rec["type"]
         return None, None
 
-    # Una query per tipo: restituisce SOLO i collegamenti del grafo.
+    # Una query per tipo
     _PROFILE_QUERIES = {
         "City": """
             MATCH (cy:City {name:$name})
@@ -440,5 +440,83 @@ class Neo4jKGManager:
                 return {}
             rec = session.run(cypher, name=canonical).single()
             return rec.data() if rec else {}
+    
+    def detect_entities_in_text(self, text: str, limit: int = 3) -> list:
+        """
+        K-RAG: individua quali entita' note nel KG (Spot/City/Festival/Prefecture/Region)
+        sono menzionate nella query di retrieval.
+        Preferisce i match piu' specifici (nome piu' lungo) e normalizza i separatori
+        (trattino/underscore -> spazio) per evitare miss del tipo 'Meiji-jingu' vs 'Meiji Jingu'.
+        """
+        query = """
+        MATCH (n)
+        WHERE any(l IN labels(n) WHERE l IN $labels)
+          AND replace(replace(toLower($text), '-', ' '), '_', ' ')
+              CONTAINS replace(replace(toLower(n.name), '-', ' '), '_', ' ')
+        RETURN DISTINCT n.name AS name,
+               [l IN $labels WHERE l IN labels(n)][0] AS type
+        """
+        with self.driver.session() as session:
+            res = session.run(query, text=text, labels=self._QUERYABLE_LABELS)
+            rows = [r.data() for r in res]
 
+        priority = {"Spot": 1, "City": 2, "Festival": 3, "Prefecture": 4, "Region": 5}
+        best = {}
+        for r in rows:
+            name = r.get("name")
+            if name and (name not in best or
+                         priority.get(r["type"], 99) < priority.get(best[name]["type"], 99)):
+                best[name] = r
+        rows = list(best.values())
+
+        rows.sort(key=lambda r: len(r.get("name") or ""), reverse=True)
+        return rows[:limit]
+
+    def get_expansion_terms(self, entity_name: str, max_terms: int = 4) -> dict:
+        """
+        K-RAG: dato un'entita' nota, restituisce i termini vicini nel grafo da usare
+        per espandere/raffinare la query RAG.
+
+        I termini sono tipizzati:
+          - kind == "theme"  -> categorie, regione, prefettura: sicuri da concatenare al seed
+          - kind == "entity" -> spot vicini/collegati: rumorosi se concatenati,
+                                 meglio usarli come sotto-query atomiche a se' stanti
+        Ritorna {seed, found, entity_type, terms, typed_terms}.
+        """
+        data = self.query_full(entity_name)
+        if not data:
+            return {"seed": entity_name, "found": False, "terms": [], "typed_terms": []}
+
+        typed = []
+
+        def _push(value, kind):
+            if isinstance(value, list):
+                for v in value:
+                    if v:
+                        typed.append({"term": v, "kind": kind})
+            elif isinstance(value, str) and value:
+                typed.append({"term": value, "kind": kind})
+
+
+        for key in ("categories", "region", "prefecture"):
+            _push(data.get(key), "theme")
+
+        for key in ("nearby_spots", "spots", "spots_in_area", "festivals", "cities", "prefectures"):
+            _push(data.get(key), "entity")
+
+        seen, ordered = set(), []
+        for t in typed:
+            term = t["term"]
+            if term and term != entity_name and term not in seen:
+                seen.add(term)
+                ordered.append(t)
+
+        ordered = ordered[:max_terms]
+        return {
+            "seed": entity_name,
+            "found": True,
+            "entity_type": data.get("entity_type"),
+            "terms": [t["term"] for t in ordered],
+            "typed_terms": ordered,
+        }
 kg_manager = Neo4jKGManager()

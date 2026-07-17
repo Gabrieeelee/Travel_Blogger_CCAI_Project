@@ -1,11 +1,12 @@
 import os
+import unicodedata
 from langchain_core.messages import RemoveMessage, SystemMessage, HumanMessage, BaseMessage, AIMessage,ToolMessage
 from dotenv import load_dotenv
 from langchain_groq import ChatGroq
 from src.schemas import EditorialCalendar, ItineraryDossier, PlannerIntent, PlanApprovalRouting,FeedbackRouting, ResearchDossier, ReviewDossier, TravelMetadataExtractor, ExtractedClaims, ClaimInfo
 from src.state import BloggerState
 from langgraph.types import Command, interrupt
-from src.tools.tools import kg_query_tool,advanced_web_research,rag_retrieval_tool, tools_list, evaluate_claim_with_lora
+from src.tools.tools import kg_query_tool,advanced_web_research,rag_retrieval_tool, tools_list, evaluate_claim_with_lora, travel_route_tool, KRAG_GROUNDING_DELIM
 from typing import Dict, List, Any, Literal
 from src.kg_manager import kg_manager
 from src.rag_manager import rag_manager
@@ -251,6 +252,7 @@ def research_warmup_node(state: BloggerState):
     reasoning = state.get("reasoning_trace", [])
     kg_summary_state = state.get("kg_summary", "")
     
+    #Chiamata al kgraph
     if feedback and kg_summary_state:
         print("[Warmup] Feedback e dati KG presenti, salto l'estrazione KG base.")
         kg_res = kg_summary_state
@@ -271,7 +273,7 @@ def research_warmup_node(state: BloggerState):
             "action": f"kg_query_tool('{topic}')",
             "observation": obs_kg
         })
-
+    #Inizio prompt
     if topic_type == "itinerary":
         locations = [loc.strip() for loc in topic.split(",")]
         format_instruction = (
@@ -415,7 +417,11 @@ def execute_tools_node(state: BloggerState):
         
         if tool_name == "kg_query_tool":
             kg_summary_update += f"\n\n[NUOVI DATI KG ESTRATTI DINAMICAMENTE]:\n{tool_result}"
-        
+
+        if tool_name == "rag_retrieval_tool" and "[K-RAG]" in tool_result:
+            krag_header = tool_result.split(KRAG_GROUNDING_DELIM, 1)[0]
+            print(f"[K-RAG][observability]\n{krag_header}")
+
         reasoning.append({
             "agent": "researcher_agent",
             "thought": agent_thought,
@@ -463,6 +469,9 @@ researcher_builder.add_edge("execute_tools", "research_agent")
 
 research_subgraph = researcher_builder.compile()
 
+
+
+
 # ═══════════════════════════════════════════
 # 3. NODO RECAP
 # ═══════════════════════════════════════════
@@ -481,10 +490,18 @@ def recap(state: BloggerState):
     
     unique_outputs = set()
     raw_data_string = ""
+    allowed_urls = set()
     for tool_name, outputs in action_results.items():
         raw_data_string += f"\n ESPORTAZIONE TOOL: {tool_name} \n"
         for idx, out in enumerate(outputs):
             testo_pulito = str(out).strip()
+
+            if KRAG_GROUNDING_DELIM in testo_pulito:
+                testo_pulito = testo_pulito.split(KRAG_GROUNDING_DELIM, 1)[1].strip()
+
+            for u in re.findall(r'https?://[^\s\)\]]+', testo_pulito):
+                allowed_urls.add(u.rstrip('.,);'))
+
             if testo_pulito not in unique_outputs:
                 unique_outputs.add(testo_pulito)
                 raw_data_string += f"[{idx+1}] {testo_pulito[:15000]}...\n"
@@ -559,6 +576,7 @@ def recap(state: BloggerState):
         structured_llm = llm.with_structured_output(ReviewDossier)
     else:
         structured_llm = llm.with_structured_output(ResearchDossier)
+
     dossier_json = None
     
     for attempt in range(2):
@@ -571,12 +589,34 @@ def recap(state: BloggerState):
             if attempt == 1:
                 return {"research_summary": f"Errore di sintesi strutturata: {e}", "reasoning_trace": reasoning}
 
-    
+    cit_rejected = []
+
+    #pulisce l url da spazi, caratteri finali, punti finali e parentesi
+    def _norm(u: str) -> str:
+        return (u or "").strip().rstrip('/').rstrip('.,);')
+
+    _allowed_norm = {_norm(u) for u in allowed_urls}
+
+    def check_url(url: str) -> str:
+        """Ritorna l'URL se verificato, altrimenti lo segnala e lo neutralizza."""
+        if not url:
+            return "Nessuna"
+        low = url.strip().lower()
+        if low in ("nessuna", "knowledge graph", "n/a", "none"):
+            return url
+        if _norm(url) in _allowed_norm:
+            return url
+        cit_rejected.append(url)
+        return "NON VERIFICATA"
+
+    def check_url_list(urls) -> list:
+        return [check_url(u) for u in (urls or [])]
+
     def format_sourced_section(section):
         testo = section.text
-        if section.source_urls:
-            urls_str = ", ".join(section.source_urls)
-            testo += f" [Fonti: {urls_str}]"
+        valid = check_url_list(section.source_urls)
+        if valid:
+            testo += f" [Fonti: {', '.join(valid)}]"
         else:
             testo += " [Fonte: Nessuna]"
         return testo
@@ -588,7 +628,8 @@ def recap(state: BloggerState):
     if topic_type == "itinerary":
         markdown_dossier += "## ITINERARIO GIORNO PER GIORNO\n"
         for day in dossier_json.days:
-            fonti_day = ", ".join(day.source_urls) if day.source_urls else "Nessuna"
+            valid_day = check_url_list(day.source_urls)
+            fonti_day = ", ".join(valid_day) if valid_day else "Nessuna"
             markdown_dossier += f"### {day.day_title}\n"
             markdown_dossier += f"**Attività:** {day.description}\n"
             markdown_dossier += f"**Logistica:** {day.logistics} [Fonti: {fonti_day}]\n\n"
@@ -596,12 +637,12 @@ def recap(state: BloggerState):
         if dossier_json.practical_info:
             markdown_dossier += "## INFO PRATICHE GENERALI\n"
             for info in dossier_json.practical_info:
-                markdown_dossier += f"- {info.detail} [Fonte: {info.source_url}]\n"
+                markdown_dossier += f"- {info.detail} [Fonte: {check_url(info.source_url)}]\n"
             markdown_dossier += "\n"
 
     elif topic_type == "review":
         markdown_dossier += f"## ANALISI STRUTTURA: {dossier_json.facility_name}\n"
-        markdown_dossier += f"**Prezzi e Prenotazioni:** {dossier_json.pricing_and_booking.detail} [Fonte: {dossier_json.pricing_and_booking.source_url}]\n\n"
+        markdown_dossier += f"**Prezzi e Prenotazioni:** {dossier_json.pricing_and_booking.detail} [Fonte: {check_url(dossier_json.pricing_and_booking.source_url)}]\n\n"
         markdown_dossier += f"### Pro e Contro\n{format_sourced_section(dossier_json.pros_and_cons)}\n\n"
         markdown_dossier += f"### Giudizio Finale\n{format_sourced_section(dossier_json.verdict)}\n\n"
 
@@ -612,7 +653,7 @@ def recap(state: BloggerState):
         if dossier_json.attractions:
             markdown_dossier += "## ATTRAZIONI E COSA VEDERE\n"
             for attr in dossier_json.attractions:
-                markdown_dossier += f"- **{attr.name}**: {attr.description} [Fonte: {attr.source_url}]\n"
+                markdown_dossier += f"- **{attr.name}**: {attr.description} [Fonte: {check_url(attr.source_url)}]\n"
 
         if dossier_json.logistics:
             markdown_dossier += "\n"
@@ -622,7 +663,7 @@ def recap(state: BloggerState):
         if dossier_json.practical_info:
             markdown_dossier += "## INFO PRATICHE E PREZZI (DA INCLUDERE OBBLIGATORIAMENTE NEL TESTO)\n"
             for info in dossier_json.practical_info:
-                markdown_dossier += f"- {info.detail} [Fonte: {info.source_url}]\n"
+                markdown_dossier += f"- {info.detail} [Fonte: {check_url(info.source_url)}]\n"
             markdown_dossier += "\n"
 
         if dossier_json.food_crafts:
@@ -633,17 +674,29 @@ def recap(state: BloggerState):
         for check in dossier_json.fact_checks:
             markdown_dossier += f"- {check}\n"
         markdown_dossier += "\n"
-        
+
+    if cit_rejected:
+        markdown_dossier += "## CITAZIONI SCARTATE (non verificate)\n"
+        for u in dict.fromkeys(cit_rejected):
+            markdown_dossier += f"- {u}\n"
+        markdown_dossier += "\n"
+
     markdown_dossier += "## FONTI CITATE\n"
     for src in dossier_json.sources:
-        markdown_dossier += f"- {src}\n"
+        if _norm(src) in _allowed_norm or (src or "").strip().lower() in ("knowledge graph",):
+            markdown_dossier += f"- {src}\n"
 
     reasoning.append({
         "agent": "recap",
         "thought": "Estrazione in schema Pydantic gerarchico completata. Ho isolato in sicurezza i source_url per evitare misattribution e convertito tutto in Markdown.",
-        "action": "llm.with_structured_output(...)",
-        "observation": markdown_dossier[:350]
+        "action": "llm.with_structured_output(...) + citation_guard(allowed_urls)",
+        "observation": (f"Citazioni scartate (non fondate): {len(set(cit_rejected))} "
+                        f"su {len(_allowed_norm)} URL ammessi. "
+                        f"Esempi scartati: {list(dict.fromkeys(cit_rejected))[:3]}")
     })
+
+    if cit_rejected:
+        print(f"[Recap][citation-guard] Scartate {len(set(cit_rejected))} citazioni non verificate: {list(dict.fromkeys(cit_rejected))[:5]}")
     
     print("[Recap] Dossier generato con successo dalla struttura JSON.")
     
@@ -653,6 +706,10 @@ def recap(state: BloggerState):
     }
 
 
+# ═══════════════════════════════════════════
+# 5. NODO FACT CHECKING
+# ═══════════════════════════════════════════
+
 def fact_checking_node(state: BloggerState):
     print("\n---  NODO: FACT CHECKING STRUTTURATO ---")
     
@@ -661,18 +718,36 @@ def fact_checking_node(state: BloggerState):
     if not riassunto:
         return Command(update={"fact_check_report": "Nessun riassunto da verificare."}, goto="drafter")
     
+    action_results = state.get("action_results", {})
+    kg_summary = state.get("kg_summary", "")
+    
+    seen_chunks = set()
+    raw_data_string = f"DATI KNOWLEDGE GRAPH:\n{kg_summary}\n\nDATI TOOL DI RICERCA:\n"
+    for tool_name, outputs in action_results.items():
+        for out in outputs:
+            testo = str(out).strip()
+            if KRAG_GROUNDING_DELIM in testo:
+                testo = testo.split(KRAG_GROUNDING_DELIM, 1)[1].strip()
+            if testo and testo not in seen_chunks:
+                seen_chunks.add(testo)
+                raw_data_string += f"{testo[:6000]}\n"
+    
     from langchain_groq import ChatGroq
     llm = ChatGroq(model="llama-3.3-70b-versatile", temperature=0)
     structured_llm = llm.with_structured_output(ExtractedClaims)
     MAX_CLAIMS = 4
+    
     system_prompt = f"""Sei un revisore editoriale specializzato in fact-checking per una Guida Turistica.
-    Il tuo compito è estrarre TUTTE le affermazioni fattuali (claims) più importanti dal testo fornito.
+    Il tuo compito è estrarre le affermazioni fattuali (claims) dal TESTO GENERATO e cercare la prova nel DATABASE ORIGINALE.
     
     REGOLE CRITICHE:
-    1. Ignora le opinioni, le descrizioni poetiche e le frasi generiche.
-    2. Concentrati su dati verificabili: Date, fatti storici, prezzi, orari, logistica, nomi di luoghi e tradizioni.
-    3. Per ogni claim, DEVI estrarre il 'paragrafo_contesto', ovvero la porzione esatta di testo da cui hai preso il claim. Non inventare il contesto, copialo.
-    4. Se il testo contiene più di {MAX_CLAIMS} claim, estrai solo i primi {MAX_CLAIMS} più rilevanti.
+    1. Estrai i claim (date, fatti storici, prezzi, orari, logistica, nomi) SOLO dal testo generato che ti fornirà l'utente. Ignora descrizioni poetiche.
+    2. Per ogni claim estratto, DEVI estrarre il 'paragrafo_contesto' ESCLUSIVAMENTE dal "DATABASE DATI GREZZI" qui sotto. Cerca la frase esatta o il blocco di testo tra i dati grezzi che conferma o smentisce il claim.
+    3. Se il claim non è presente nel database dei dati grezzi, imposta 'paragrafo_contesto' come "Nessun dato grezzo trovato per questa affermazione".
+    4. Se il testo generato contiene più di {MAX_CLAIMS} claim, estrai solo i primi {MAX_CLAIMS} più rilevanti.
+    
+    DATABASE DATI GREZZI (LA TUA UNICA FONTE DI VERITÀ PER IL CONTESTO):
+    {raw_data_string}
     """
     
     print("[Fact Checker] Estrazione strutturata dei claim in corso...")
@@ -680,7 +755,7 @@ def fact_checking_node(state: BloggerState):
     try:
         risultato_estrazione = structured_llm.invoke([
             SystemMessage(content=system_prompt),
-            HumanMessage(content=f"Testo da analizzare:\n{riassunto}")
+            HumanMessage(content=f"Testo generato da analizzare (da cui estrarre i claim):\n{riassunto}")
         ])
         claims_estratti = risultato_estrazione.lista_claims
     except Exception as e:
@@ -710,10 +785,8 @@ def fact_checking_node(state: BloggerState):
         "fact_check_report": report
     }
 
-
-
 # ═══════════════════════════════════════════
-# 4. NODO DRAFTER
+# 5. NODO DRAFTER
 # ═══════════════════════════════════════════
 def drafter_node(state: BloggerState):
     print("\n--- [DrafterNode] Stesura Articolo Travel Multimodale ---")
@@ -779,7 +852,7 @@ def drafter_node(state: BloggerState):
     ### 5. GESTIONE DEL FACT-CHECKING (CRITICO)
     Devi allinearti rigorosamente al "Report di Fact-Checking" fornito:
     - CONTRADDIZIONE: È assolutamente vietato inserire nel testo queste informazioni. Ignorale.
-    - NEUTRO: Tratta con cautela, usando un tono dubitativo ("si dice che...", "le leggende narrano...").
+    - NEUTRO: È assolutamente vietato inserire nel testo queste informazioni. Ignorale.
     - ENTAILMENT: Usa queste informazioni con assoluta sicurezza.
 
     ### 6. STILE DELLE CITAZIONI E IMPAGINAZIONE VISIVA
@@ -787,7 +860,6 @@ def drafter_node(state: BloggerState):
     - IMMAGINI: DEVI distribuire 2 o 3 immagini ALL'INTERNO del testo per spezzare i paragrafi. NON raggrupparle alla fine. Inserisci in mezzo al testo: [IMAGE: descrizione dettagliata del soggetto visivo in INGLESE].
     """
 
-    # 4. Aggiorna il Contesto Dinamico
     dynamic_context = f"""
     ### CONTESTO EDITORIALE
     - **Argomento Principale**: {topic}
@@ -904,7 +976,7 @@ def drafter_node(state: BloggerState):
     }
 
 # ═══════════════════════════════════════════
-# 5. NODO HUMAN-IN-THE-LOOP
+# 6. NODO HUMAN-IN-THE-LOOP
 # ═══════════════════════════════════════════
 def human_in_the_loop_node(state: BloggerState) -> Command[Literal["kg_updater", "drafter", "researcher", "planner"]]:
     """Presenta la bozza all'utente e gestisce il feedback classificandolo con un LLM."""
@@ -1028,7 +1100,7 @@ def human_in_the_loop_node(state: BloggerState) -> Command[Literal["kg_updater",
     return Command(update=update_data, goto=goto_node)
 
 # ═══════════════════════════════════════════
-# 6. NODO KG UPDATER
+# 7. NODO KG UPDATER
 # ═══════════════════════════════════════════
 def kg_updater_node(state: BloggerState):
     """
@@ -1114,6 +1186,7 @@ def kg_updater_node(state: BloggerState):
             }
             
     print(f"    [KG UPDATER] Entità geografiche estratte: {len(extracted_entities.get('mapped_locations', []))} location mappate.")
+
     # ==========================================
     # SAVATAGGIO NEL KNOWLEDGE GRAPH E NEL RAG
     # ==========================================

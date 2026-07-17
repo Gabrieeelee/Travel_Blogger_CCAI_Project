@@ -188,6 +188,104 @@ class RAGManager:
                     
         return diverse_docs
     
+
+
+    LOGISTIC_KW = (
+        "costo", "prezzo", "biglietto", "biglietti", "tariffa", "tariffe",
+        "orario", "orari", "apertura", "chiusura", "ticket", "prenotazione",
+        "quanto costa", "yen", "euro", "gratis", "gratuito"
+    )
+
+    def krag_search(self, query: str, k: int = 8):
+        """
+        K-RAG retrieval: usa il Knowledge Graph per ESPANDERE o RAFFINARE la query,
+        poi esegue il retrieval ibrido (Chroma + BM25) sulle sotto-query risultanti,
+        fondendo e deduplicando i documenti.
+
+        Ritorna (docs, expansion_info). 'expansion_info' rende osservabile (reasoning
+        trace / LangSmith) il fatto che il retrieval e' stato guidato dal grafo.
+
+        Strategia:
+          - query LOGISTICHE (costo/orari/...): il KG segmenta la query nelle sue
+            entita' e genera una sotto-query atomica per ciascuna, conservando le
+            keyword logistiche (nessun termine tematico aggiunto).
+          - query TEMATICHE: espansione classica seed + termini "theme" del grafo,
+            con gli spot collegati usati come sotto-query atomiche.
+        """
+        expansion_info = {
+            "mode": None,
+            "seed_entities": [],
+            "expansion_terms": [],
+            "subqueries": [query],
+        }
+
+        try:
+            seeds = kg_manager.detect_entities_in_text(query, limit=3)
+        except Exception as e:
+            seeds = []
+            expansion_info["error"] = str(e)
+            print(f"[K-RAG] ATTENZIONE: detect_entities_in_text ha fallito: {e}")
+        expansion_info["seed_entities"] = [s["name"] for s in seeds]
+
+        merged, seen_keys = [], set()
+
+        def _add(docs):
+            for d in docs:
+                key = (d.metadata.get("source"), d.page_content[:80])
+                if key not in seen_keys:
+                    seen_keys.add(key)
+                    merged.append(d)
+
+        #  Retrieval sempre eseguito sulla query originale
+        _add(self.search(query, k=k))
+
+        is_logistic = any(kw in query.lower() for kw in self.LOGISTIC_KW)
+
+        if is_logistic and seeds:
+            expansion_info["mode"] = "logistic_refine"
+            for s in seeds:
+                subq = f"{s['name']} costo biglietto orario apertura"
+                expansion_info["subqueries"].append(subq)
+                _add(self.search(subq, k=max(2, k // 2)))
+
+        elif seeds:
+
+            expansion_info["mode"] = "thematic_expand"
+            terms = []
+            for s in seeds:
+                terms.extend(kg_manager.get_expansion_terms(s["name"]).get("terms", []))
+            seen_t = set()
+            terms = [t for t in terms if not (t in seen_t or seen_t.add(t))]
+            expansion_info["expansion_terms"] = terms
+
+            seed_name = seeds[0]["name"]
+            for term in terms[:3]:
+                # Evita ripetizioni tipo "Tokyo Tokyo Skytree"
+                if seed_name.lower() in term.lower():
+                    subq = term
+                else:
+                    subq = f"{seed_name} {term}"
+                expansion_info["subqueries"].append(subq)
+                _add(self.search(subq, k=max(2, k // 3)))
+        else:
+            expansion_info["mode"] = "no_kg_entity_fallback"
+
+        if merged:
+            try:
+                import numpy as np
+                contents = [d.page_content[:512] for d in merged]
+                q_vec = np.array(self.embeddings.embed_query(query))
+                d_vecs = np.array(self.embeddings.embed_documents(contents))
+                q_norm = q_vec / (np.linalg.norm(q_vec) + 1e-9)
+                d_norm = d_vecs / (np.linalg.norm(d_vecs, axis=1, keepdims=True) + 1e-9)
+                sims = d_norm @ q_norm
+                merged = [merged[i] for i in np.argsort(-sims)]
+                expansion_info["reranked"] = True
+            except Exception as e:
+                print(f"[K-RAG] Re-rank saltato: {e}")
+
+        return merged[:k], expansion_info
+    
     def add_documents(self, documents: list):
         """
         Aggiunge nuovi documenti al Vector DB.

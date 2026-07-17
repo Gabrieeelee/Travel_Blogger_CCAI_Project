@@ -27,6 +27,10 @@ from urllib.parse import urlparse
 
 load_dotenv()
 
+
+
+KRAG_GROUNDING_DELIM = "\n===GROUNDING_DOCS===\n"
+
 _processed_urls = set()
 
 _banned_domains = [
@@ -57,7 +61,6 @@ def advanced_web_research(query: str) -> str:
     print(f"[Scraper Tool] Avvio ricerca web travel per: '{query}'")
     
     TAVILY_SCORE_THRESHOLD = 0.35   
-    MIN_PRACTICAL_KEYWORDS = 3
     tavily = TavilySearchResults(max_results=4)
     results = tavily.invoke({"query": query})
     results_list = results.get("results", []) if isinstance(results, dict) else results
@@ -189,17 +192,13 @@ def advanced_web_research(query: str) -> str:
             rag_manager.add_documents(batch)
             print(f"[Scraper Tool] Salvato batch di {len(batch)} documenti puliti nel RAG.")
             
-        # --- MODIFICA: Hot RAG Retrieval immediato ---
-        print(f"[Scraper Tool] Estrazione immediata dei dati a caldo per la query: '{query}'")
-        
-        # Effettuiamo subito una ricerca per restituire i dati pertinenti
-        hot_results = rag_manager.search(query, k=8)
-        formatted_hot_results = rag_manager.format_search_results(hot_results)
+        search_results = rag_manager.search(query, k=8)
+        formatted_search_results = rag_manager.format_search_results(search_results)
         
         return (
             f"Ricerca Web completata. Ho scaricato guide da {len(saved_urls)} fonti nel RAG.\n"
             f"Ecco i dati estratti direttamente dalle nuove fonti appena scaricate:\n\n"
-            f"{formatted_hot_results}"
+            f"{formatted_search_results}"
         )
     
     return "La ricerca web non ha prodotto blog di viaggio leggibili o sono stati tutti bloccati dai filtri OTA."
@@ -245,7 +244,6 @@ def kg_query_tool(query_string: str) -> str:
             if not data or not data.get("entity_type"):
                 not_found.append(entity)
                 continue
-            # Dedup delle liste di collegamenti (citta'+prefettura possono ripetere festival).
             for key in ("spots", "festivals", "categories", "nearby_spots",
                         "spots_in_area", "cities", "prefectures"):
                 if key in data:
@@ -276,11 +274,29 @@ def kg_query_tool(query_string: str) -> str:
 @tool
 def rag_retrieval_tool(query: str) -> str:
     """Usa questo tool per cercare nell'archivio locale.
-    Contiene descrizioni di attrazioni, informazioni storiche e culturali sul Giappone."""
-    print(f"[Esecuzione Tool] Ricerca Ibrida (Chroma+BM25) per: {query}")
-    
-    docs = rag_manager.search(query, k=8)
-    return rag_manager.format_search_results(docs)
+    Contiene descrizioni di attrazioni, informazioni storiche e culturali sul Giappone.
+    La query viene automaticamente ESPANSA o RAFFINATA usando il Knowledge Graph (K-RAG)
+    per migliorare la pertinenza dei documenti recuperati."""
+    print(f"[Esecuzione Tool] K-RAG (Chroma+BM25 + espansione KG) per: {query}")
+
+    docs, exp = rag_manager.krag_search(query, k=8)
+
+    header = ""
+    if exp.get("seed_entities"):
+        header = (
+            "[K-RAG] Query guidata dal Knowledge Graph.\n"
+            f"Modalita': {exp.get('mode')}\n"
+            f"Entita' seed dal KG: {', '.join(exp['seed_entities'])}\n"
+            f"Termini di espansione: {', '.join(exp['expansion_terms']) or 'nessuno (query logistica/segmentata)'}\n"
+            f"Sotto-query eseguite: {exp['subqueries']}\n\n"
+        )
+    else:
+        header = "[K-RAG] Nessuna entita' del grafo trovata nella query: retrieval sulla sola query originale.\n\n"
+
+
+
+
+    return header + KRAG_GROUNDING_DELIM + rag_manager.format_search_results(docs)
 
 
 
