@@ -207,74 +207,71 @@ def advanced_web_research(query: str) -> str:
 @tool
 def kg_query_tool(query_string: str) -> str:
     """
-    Usa questo tool per interrogare il Knowledge Graph (storico del blog turistico e metadati).
-    Supporta località singole ("Tokyo") o multiple separate da virgola ("Tokyo, Kyoto, Osaka").
-    Restituisce informazioni su attrazioni vicine (K-RAG), categorie, località e ti dice 
-    se abbiamo già scritto guide o itinerari su queste mete.
+    Interroga il Knowledge Graph (Neo4j) e restituisce i COLLEGAMENTI GENERALI
+    del grafo per l'entita' richiesta, riconoscendone automaticamente il tipo.
+    Supporta piu' entita' separate da virgola ("Tokyo, Kinkaku-ji, Gion Matsuri").
+
+    - City      -> prefettura, regione, spot collegati, festival (citta' + prefettura)
+    - Spot      -> citta', prefettura, regione, categorie, spot vicini (NEAR), festival della zona
+    - Festival  -> citta', prefettura, regione, spot della zona
+    - Prefecture / Region -> collegamenti gerarchici e festival
+
+    Se l'entita' non e' nel grafo lo segnala, cosi' puoi usare i tool Web e RAG.
     """
     entities = [e.strip() for e in query_string.split(",") if e.strip()]
-    
     if not entities:
         return json.dumps({
             "status": "error",
-            "message": "Nessuna entità valida fornita per la ricerca nel KG."
-        })
+            "message": "Nessuna entita' valida fornita per la ricerca nel KG."
+        }, ensure_ascii=False)
 
     print(f"[Esecuzione Tool] Interrogazione KG per: {entities}")
-    
-    aggregated_krag = {}
-    aggregated_history = []
-    not_found = []  
+
+    def _dedup(seq):
+        seen, out = set(), []
+        for x in seq or []:
+            if x and x not in seen:
+                seen.add(x)
+                out.append(x)
+        return out
+
+    results = {}
+    not_found = []
     errors = []
-    found_data = False
 
     for entity in entities:
         try:
-           
-            risultato = kg_manager.query(entity)
-            krag_context = risultato.get("krag_context", {})
-            post_storici = risultato.get("editorial_history", [])
-
-            if krag_context or post_storici:
-                found_data = True
-                if krag_context:
-                    aggregated_krag[entity] = krag_context
-                
-                for post in post_storici:
-                    if post not in aggregated_history:
-                        aggregated_history.append(post)
-            else:
+            data = kg_manager.query_full(entity)
+            if not data or not data.get("entity_type"):
                 not_found.append(entity)
-
+                continue
+            # Dedup delle liste di collegamenti (citta'+prefettura possono ripetere festival).
+            for key in ("spots", "festivals", "categories", "nearby_spots",
+                        "spots_in_area", "cities", "prefectures"):
+                if key in data:
+                    data[key] = _dedup(data[key])
+            results[entity] = data
         except Exception as e:
             error_msg = f"Errore per '{entity}': {str(e)}"
             print(f"  [KG Tool]  {error_msg}")
             errors.append(error_msg)
 
-    try:
-        aggregated_history.sort(key=lambda x: str(x.get('date', '')), reverse=True)
-    except Exception:
-        pass
-    aggregated_history = aggregated_history[:10]
-
-    if not found_data:
+    if not results:
         return json.dumps({
             "status": "no_data",
-            "message": f"Non abbiamo mai trattato queste località sul blog e non ci sono dati nel database Neo4j. Affidati ai tool Web e RAG per reperire le informazioni.",
+            "message": ("Nessuna di queste entita' e' presente nel Knowledge Graph. "
+                        "Affidati ai tool Web e RAG per reperire le informazioni."),
             "entities_not_found": not_found,
             "errors": errors if errors else None
-        }, default=str, ensure_ascii=False)
+        }, ensure_ascii=False, default=str)
 
-    response_data = {
+    return json.dumps({
         "status": "success",
-        "message": f"Dati e storico trovati per le località richieste.",
-        "krag_context": aggregated_krag,
-        "past_coverage": aggregated_history,
+        "message": "Collegamenti trovati nel Knowledge Graph.",
+        "krag_context": results,
         "entities_not_found": not_found if not_found else None,
         "errors": errors if errors else None
-    }
-    
-    return json.dumps(response_data, ensure_ascii=False, indent=2, default=str)
+    }, ensure_ascii=False, indent=2, default=str)
 
 @tool
 def rag_retrieval_tool(query: str) -> str:

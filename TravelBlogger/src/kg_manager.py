@@ -253,7 +253,7 @@ class Neo4jKGManager:
 
         // 8. Collegamento di vicinanza tra Spot
         WITH b, spots
-        CALL(b, spots) {
+        CALL(b,spots) {
             WITH spots
             UNWIND spots AS s1
             UNWIND spots AS s2
@@ -323,5 +323,122 @@ class Neo4jKGManager:
             record = result.single()
             return json.loads(record["sequence"]) if record and record["sequence"] else None
 
+
+
+    _QUERYABLE_LABELS = ["Spot", "City", "Festival", "Prefecture", "Region"]
+
+    def _detect_entity(self, session, entity_name: str):
+        """
+        Riconosce il tipo di un nome (case-insensitive) e restituisce il nome
+        canonico. Ritorna (canonical_name, entity_type) oppure (None, None).
+        Risolve le ambiguità (es. Tokyo City vs Tokyo Prefecture) dando priorità gerarchica.
+        """
+        query = """
+        MATCH (n)
+        WHERE any(l IN labels(n) WHERE l IN $labels)
+          AND (n.name = $name OR toLower(n.name) = toLower($name))
+        WITH n,
+             [l IN $labels WHERE l IN labels(n)][0] AS type,
+             CASE WHEN n.name = $name THEN 0 ELSE 1 END AS exactness
+        WITH n, type, exactness,
+             CASE type
+                 WHEN 'Spot' THEN 1
+                 WHEN 'City' THEN 2
+                 WHEN 'Festival' THEN 3
+                 WHEN 'Prefecture' THEN 4
+                 WHEN 'Region' THEN 5
+                 ELSE 99
+             END AS priority
+        RETURN n.name AS canonical_name, type
+        ORDER BY exactness ASC, priority ASC
+        LIMIT 1
+        """
+        rec = session.run(query, name=entity_name, labels=self._QUERYABLE_LABELS).single()
+        if rec:
+            return rec["canonical_name"], rec["type"]
+        return None, None
+
+    # Una query per tipo: restituisce SOLO i collegamenti del grafo.
+    _PROFILE_QUERIES = {
+        "City": """
+            MATCH (cy:City {name:$name})
+            OPTIONAL MATCH (cy)-[:IN_PREFECTURE]->(pref:Prefecture)
+            OPTIONAL MATCH (pref)-[:IN_REGION]->(r:Region)
+            RETURN
+                'City' AS entity_type,
+                cy.name AS name,
+                pref.name AS prefecture,
+                r.name AS region,
+                [(s:Spot)-[:IN_CITY]->(cy) | s.name] AS spots,
+                [(cy)<-[:HELD_IN]-(f:Festival)  | f.name] +
+                [(pref)<-[:HELD_IN]-(f2:Festival) | f2.name] AS festivals
+        """,
+        "Spot": """
+            MATCH (s:Spot {name:$name})
+            OPTIONAL MATCH (s)-[:IN_CITY]->(cy:City)
+            OPTIONAL MATCH (s)-[:IN_PREFECTURE]->(sp:Prefecture)
+            OPTIONAL MATCH (cy)-[:IN_PREFECTURE]->(cp:Prefecture)
+            WITH s, cy, coalesce(cp, sp) AS pref
+            OPTIONAL MATCH (pref)-[:IN_REGION]->(r:Region)
+            RETURN
+                'Spot' AS entity_type,
+                s.name AS name,
+                cy.name AS city,
+                pref.name AS prefecture,
+                r.name AS region,
+                [(s)-[:OF_CATEGORY]->(c:Category) | c.name] AS categories,
+                [(s)-[:NEAR]->(n:Spot) | n.name] AS nearby_spots,
+                [(cy)<-[:HELD_IN]-(f:Festival)  | f.name] +
+                [(pref)<-[:HELD_IN]-(f2:Festival) | f2.name] AS festivals
+        """,
+        "Festival": """
+            MATCH (f:Festival {name:$name})
+            OPTIONAL MATCH (f)-[:HELD_IN]->(cy:City)
+            OPTIONAL MATCH (f)-[:HELD_IN]->(pdirect:Prefecture)
+            OPTIONAL MATCH (cy)-[:IN_PREFECTURE]->(cpref:Prefecture)
+            WITH f, cy, coalesce(pdirect, cpref) AS pref
+            OPTIONAL MATCH (pref)-[:IN_REGION]->(r:Region)
+            RETURN
+                'Festival' AS entity_type,
+                f.name AS name,
+                cy.name AS city,
+                pref.name AS prefecture,
+                r.name AS region,
+                [(s:Spot)-[:IN_CITY]->(cy) | s.name] AS spots_in_area
+        """,
+        "Prefecture": """
+            MATCH (pref:Prefecture {name:$name})
+            OPTIONAL MATCH (pref)-[:IN_REGION]->(r:Region)
+            RETURN
+                'Prefecture' AS entity_type,
+                pref.name AS name,
+                r.name AS region,
+                [(cy:City)-[:IN_PREFECTURE]->(pref) | cy.name] AS cities,
+                [(pref)<-[:HELD_IN]-(f:Festival) | f.name] AS festivals
+        """,
+        "Region": """
+            MATCH (r:Region {name:$name})
+            RETURN
+                'Region' AS entity_type,
+                r.name AS name,
+                [(p:Prefecture)-[:IN_REGION]->(r) | p.name] AS prefectures
+        """,
+    }
+
+    def query_full(self, entity_name: str) -> dict:
+        """
+        Restituisce i collegamenti del grafo per un'entita', in base al suo tipo
+        (City, Spot, Festival, oppure Prefecture/Region come fallback).
+        Ritorna un dict piatto con 'entity_type' + i collegamenti, oppure {}.
+        """
+        with self.driver.session() as session:
+            canonical, etype = self._detect_entity(session, entity_name)
+            if not etype:
+                return {}
+            cypher = self._PROFILE_QUERIES.get(etype)
+            if not cypher:
+                return {}
+            rec = session.run(cypher, name=canonical).single()
+            return rec.data() if rec else {}
 
 kg_manager = Neo4jKGManager()

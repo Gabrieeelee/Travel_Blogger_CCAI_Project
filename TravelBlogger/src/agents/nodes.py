@@ -502,6 +502,9 @@ def recap(state: BloggerState):
     OBIETTIVO: Meta: '{topic}' | Formato: '{topic_type}' | Taglio (Angle): '{angle}'
     {f"VINCOLO TEMPORALE CRITICO: L'itinerario DEVE essere strutturato ESATTAMENTE su {duration}." if duration else ""}
 
+    DATI DI PARTENZA (KNOWLEDGE GRAPH):
+    {kg_summary[:1500]}
+
     DATI GREZZI ESTRATTI (da tool web, RAG e ricerche):
     {raw_data_string}
 
