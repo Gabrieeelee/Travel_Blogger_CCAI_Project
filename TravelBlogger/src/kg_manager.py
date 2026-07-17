@@ -253,7 +253,7 @@ class Neo4jKGManager:
 
         // 8. Collegamento di vicinanza tra Spot
         WITH b, spots
-        CALL(b) {
+        CALL(b, spots) {
             WITH spots
             UNWIND spots AS s1
             UNWIND spots AS s2

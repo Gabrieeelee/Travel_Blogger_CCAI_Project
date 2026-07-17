@@ -513,6 +513,7 @@ def recap(state: BloggerState):
     2. **CAMPI OBBLIGATORI E STRUTTURA**:
     - **DIVIETO DI OMISSIONE**: Non omettere MAI chiavi previste dallo schema. Se per il focus dell'articolo non trovi informazioni per una specifica sezione, DEVI comunque generare la chiave inserendo "Nessuna informazione rilevante" e lasciando vuota la lista delle fonti.
     - `fact_checks`: popola questo campo se noti informazioni contrastanti tra le fonti; riporta brevemente la discrepanza e indica quale versione hai scelto.
+    - Tutte le attrazioni, i musei, i ristoranti e le informazioni pratiche DEVONO riferirsi ESCLUSIVAMENTE alla meta richiesta ({topic}). Se un'attrazione menzionata in una fonte non si trova nella prefettura/città indicata, SCARTALA. Non includere mai informazioni su altre regioni del Giappone.
     - `attractions` e `practical_info`: devono essere liste di oggetti esatti.
         - Per `attractions`: {{"name": "...", "description": "...", "source_url": "..."}}
         - Per `practical_info`: {{"detail": "...", "source_url": "..."}}
@@ -524,9 +525,9 @@ def recap(state: BloggerState):
     - `attractions`: almeno 5-7 oggetti con nome, descrizione dettagliata, source_url
     - `practical_info`: almeno 5-7 dati numerici (prezzi, orari, distanze)
     - `logistics.text`: informazioni sui trasporti con dettagli (compagnie, costi, tempi)
-    - Se NON ci sono dati logistici, prezzi, info pratiche o nomi di ristoranti nei documenti, LASCIA I CAMPI VUOTI [].
+    - È severamente vietato inserire prezzi, orari o numeri che non compaiono testualmente nelle fonti. Se non li trovi, lascia il campo vuoto o scrivi 'Non disponibile'.
     - È SEVERAMENTE VIETATO inventare dati o URL per riempire lo schema.
-
+    
     3. **RISOLUZIONE ALLUCINAZIONI SULLE FONTI (CRITICO)**:
     - **NON** scrivere mai manualmente "[Fonte: URL]" all'interno dei testi descrittivi (`text`, `description`, `detail`).
     - Usa **ESCLUSIVAMENTE** gli appositi campi `source_url` o `source_urls` previsti nei sottomodelli.
