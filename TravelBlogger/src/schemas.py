@@ -42,17 +42,17 @@ class FeedbackRouting(BaseModel):
 
 class BaseDossier(BaseModel):
     title: str = Field(description="Titolo accattivante del dossier turistico/itinerario/recensione.")
-    introduction: str = Field(description="Introduzione discorsiva ed evocativa del focus editoriale (angle). Includi contesto storico, culturale e geografico della meta. Almeno 4-5 frasi dense di informazioni.")
+    introduction: str = Field(description="Sintesi discorsiva e dettagliata del focus editoriale (angle). Almeno 3 frasi.")
     fact_checks: List[str] = Field(default_factory=list, description="Avvisi su incongruenze tra le fonti.")
     sources: List[str] = Field(default_factory=list, description="Elenco crudo di TUTTI gli URL consultati.")
 
 class SourcedSection(BaseModel):
-    text: str = Field(description="Testo ESTREMAMENTE lungo, descrittivo e ricco di dettagli. ASSOLUTAMENTE VIETATO fare sintesi brevi o usare elenchi puntati. Devi conservare interi paragrafi di aneddoti storici, curiosità culturali e descrizioni visive/sensoriali presenti nei dati grezzi. Scrivi almeno 100-150 parole per fornire al copywriter materiale denso e approfondito.")
+    text: str = Field(description="Testo lungo, descrittivo, discorsivo e ricco di dettagli narrativi.")
     source_urls: List[str] = Field(default_factory=list, description="Lista esatta degli URL (estratti dai tool grezzi) usati come fonte per redigere questo testo. Inserisci SOLO URL realmente presenti nei dati.")
 
 class AttractionDetail(BaseModel):
     name: str = Field(description="Nome esatto dell'attrazione, tempio, parco o quartiere.")
-    description: str = Field(description="Descrizione profonda e immersiva dell'attrazione. VIETATO essere telegrafici. Includi dettagli architettonici reali (es. materiali, stili, dimensioni), cenni storici, leggende e atmosfera prelevati dalle fonti. Genera un paragrafo corposo.")
+    description: str = Field(description="Descrizione dettagliata e narrativa dell'attrazione.")
     source_url: str = Field(description="L'URL ESATTO da cui hai estratto questa informazione. Nessuna allucinazione consentita. Se l'info deriva dal KNOWLEDGE GRAPH, scrivi 'Knowledge Graph'.")
 
 class PracticalInfoDetail(BaseModel):
@@ -75,16 +75,15 @@ class ExtractedClaims(BaseModel):
 
 class DayPlan(BaseModel):
     day_title: str = Field(description="Titolo della giornata (es. 'Giorno 1: Arrivo a Tokyo e Shibuya').")
-    description: str = Field(description="Descrizione ESTREMAMENTE dettagliata e corposa delle attività della giornata. DEVI conservare aneddoti, curiosità, descrizioni fisiche dei luoghi e cenni storici dai dati grezzi. ASSOLUTAMENTE VIETATO fare riassunti di due righe. Scrivi un testo narrativo lungo che serva da 'scheletro' per l'articolo finale.")
-    logistics: str = Field(description="Dettagli logistici e spostamenti (es. distanze esatte, nomi dei treni, linee della metro, tempi di percorrenza, costi dei biglietti). Devi inserire numeri e dati precisi.")
-    source_urls: List[str] = Field(default_factory=list, description="Lista degli URL usati come fonte per le informazioni di questa giornata.")
+    description: str = Field(description="Descrizione narrativa e dettagliata delle attività.")
+    logistics: str = Field(description="Dettagli fondamentali sugli spostamenti (distanze, tempi dei treni, mezzi consigliati).")
+    source_urls: List[str] = Field(default_factory=list, description="Lista degli URL usati come fonte.")
 
 class ItineraryDossier(BaseDossier):
     days: List[DayPlan] = Field(description="Elenco dettagliato giorno per giorno dell'itinerario.")
     practical_info: List[PracticalInfoDetail] = Field(default_factory=list, description="Consigli pratici universali sul viaggio (es. Japan Rail Pass, SIM card).")
 
 class ReviewDossier(BaseDossier):
-    # Eredita: title, introduction, fact_checks, sources
     facility_name: str = Field(description="Nome esatto della struttura, hotel o ristorante.")
     pros_and_cons: SourcedSection = Field(description="Analisi critica: pro e contro emersi dalle recensioni e dalle fonti.")
     pricing_and_booking: PracticalInfoDetail = Field(description="Costi medi, ticket o prezzi del menu.")

@@ -33,7 +33,8 @@ _banned_domains = [
     "booking.com", "agoda.com", "tripadvisor", "expedia.com", 
     "airbnb.com", "trivago.com", "hotels.com", "skyscanner", 
     "kayak.com", "getyourguide.com", "klook.com", "viator.com", "japanican.com",
-    "trip.com", "insiemeintour.it", "travel365.it", "turismo-giappone.it"
+    "trip.com", "insiemeintour.it", "travel365.it", "turismo-giappone.it",
+    "tokyotohiroshima.com", "civitatis.com", "tourscanner.com" 
 ]
 
 def is_valid_content(text: str) -> bool:
@@ -72,11 +73,10 @@ def advanced_web_research(query: str) -> str:
             return False
             
         spam_words = [
-            "aggiungi al carrello", "acquista il biglietto", 
-            "voli low cost", "seleziona le date", "cerca voli"
+            "aggiungi al carrello", "seleziona le date", "cerca voli", "tour privato", "guadagnare commissioni","cancellazione gratuita" 
         ]
         
-        if sum(1 for word in spam_words if word in testo_lower) > 2: 
+        if sum(1 for word in spam_words if word in testo_lower) > 5: 
             return False
             
         return True
@@ -189,7 +189,18 @@ def advanced_web_research(query: str) -> str:
             rag_manager.add_documents(batch)
             print(f"[Scraper Tool] Salvato batch di {len(batch)} documenti puliti nel RAG.")
             
-        return f"Ricerca Web completata. Ho scaricato guide da {len(saved_urls)} fonti nel RAG. CHIAMA OBBLIGATORIAMENTE 'rag_retrieval_tool' per leggere questi nuovi testi."
+        # --- MODIFICA: Hot RAG Retrieval immediato ---
+        print(f"[Scraper Tool] Estrazione immediata dei dati a caldo per la query: '{query}'")
+        
+        # Effettuiamo subito una ricerca per restituire i dati pertinenti
+        hot_results = rag_manager.search(query, k=8)
+        formatted_hot_results = rag_manager.format_search_results(hot_results)
+        
+        return (
+            f"Ricerca Web completata. Ho scaricato guide da {len(saved_urls)} fonti nel RAG.\n"
+            f"Ecco i dati estratti direttamente dalle nuove fonti appena scaricate:\n\n"
+            f"{formatted_hot_results}"
+        )
     
     return "La ricerca web non ha prodotto blog di viaggio leggibili o sono stati tutti bloccati dai filtri OTA."
 
@@ -271,7 +282,7 @@ def rag_retrieval_tool(query: str) -> str:
     Contiene descrizioni di attrazioni, informazioni storiche e culturali sul Giappone."""
     print(f"[Esecuzione Tool] Ricerca Ibrida (Chroma+BM25) per: {query}")
     
-    docs = rag_manager.search(query, k=5)
+    docs = rag_manager.search(query, k=8)
     return rag_manager.format_search_results(docs)
 
 
