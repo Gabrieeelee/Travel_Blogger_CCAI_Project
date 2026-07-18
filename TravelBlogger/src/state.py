@@ -17,3 +17,4 @@ class BloggerState(TypedDict):
     research_summary: str
     fact_check_report: str
     tool_call_count: int
+    

@@ -448,7 +448,7 @@ def route_research(state: BloggerState) -> Literal["execute_tools", "__end__"]:
     last_message = messages[-1]
     
     if hasattr(last_message, "tool_calls") and last_message.tool_calls:
-        if tool_call_count >= 8:
+        if tool_call_count >= 6:
             print(f"\n[Router] Raggiunto l'hard-limit di {tool_call_count} chiamate ai tool. Uscita forzata dal loop per prevenire crash.")
             return "__end__"
         
@@ -504,7 +504,7 @@ def recap(state: BloggerState):
 
             if testo_pulito not in unique_outputs:
                 unique_outputs.add(testo_pulito)
-                raw_data_string += f"[{idx+1}] {testo_pulito[:15000]}...\n"
+                raw_data_string += f"[{idx+1}] {testo_pulito[:13000]}...\n"
 
     if topic_type == "itinerary":
         format_instructions = "- STRUTTURA: Itinerario multi-tappa. Struttura i dati cronologicamente per coprire più tappe, con sezioni distinte e dettagliate per ogni singola giornata o città."
@@ -833,12 +833,14 @@ def drafter_node(state: BloggerState):
     - ZERO ALLUCINAZIONI: È SEVERAMENTE VIETATO introdurre eventi, festival, prezzi, cenni storici, tradizioni, informazioni logistiche (es. clima, moneta, lingua) o luoghi che NON siano esplicitamente scritti nel Dossier. 
     - L'unico input fattuale permesso è quello fornito sotto 'DOSSIER FATTUALE' e 'STORICO KNOWLEDGE GRAPH'.
     - Se il Dossier non contiene dettagli su un certo aspetto (es. la storia di un tempio), non menzionarlo o limitati a descriverne l'atmosfera visiva senza inventare date o fatti.
+    - Prima di scrivere qualsiasi aggettivo numerico o valutativo (es. prezzi, date, giorni della settimana, gratuità), chiediti: 'Questa parola/frase è scritta ESATTAMENTE nel Dossier?'. Se non lo è, NON scriverla. 
+    - Per le festività, se il dossier dice 'ogni gennaio', tu scrivi esattamente 'ogni gennaio', non aggiungere mai il giorno specifico. 
+    - Se il dossier elenca 5 attrazioni, devi citarle TUTTE e 5.
 
     ### 2. REGOLE DI STORYTELLING E STILE NARRATIVO (CRITICO)
     - HOOK INIZIALE: Non iniziare MAI con frasi banali come "[Nome Città] è una città che offre...". Inizia sempre l'articolo con una scena evocativa, un dettaglio visivo o un'azione.
-    - SHOW, DON'T TELL (SENSORIALITÀ): Trasforma i dati freddi in esperienze vissute. Non dire che un tempio è "bello e antico"; descrivi il legno scuro consumato dal tempo, il suono delle campane tibetane o il sapore pungente del matcha.
+    - Trasforma i dati freddi in esperienze. Non dire che un tempio è "bello e antico"; descrivi il legno scuro consumato dal tempo, il suono delle campane tibetane o il sapore pungente del matcha.
     - ESPANSIONE NARRATIVA, NON FATTUALE: Per raggiungere la lunghezza desiderata, espandi le descrizioni sensoriali, le emozioni e le impressioni visive, NON l'elenco dei fatti. Gioca con le parole, non con i dati.
-    - DIVIETO ASSOLUTO DI CLICHÉ: È severamente vietato usare espressioni banali come: "mix di antico e moderno", "tesoro nascosto", "città vibrante", "qualcosa per tutti".
 
     ### 3. STRUTTURA E FORMATTAZIONE GENERALE
     - Usa ESCLUSIVAMENTE il linguaggio Markdown. 
@@ -846,6 +848,7 @@ def drafter_node(state: BloggerState):
     - Dividi il testo usando `## Sottotitoli` descrittivi.
     - LOGISTICA E INFO PRATICHE: Se nel Dossier che ricevi è presente una sezione sulla Logistica e Spostamenti, incorporala come H2 ('## Come muoversi') raccontandola in modo evocativo ma preciso. Se il Dossier NON contiene informazioni logistiche, NON inventare nulla e ometti la sezione. Non fare MAI elenchi puntati asettici per i costi, intrecciali nel testo.
 
+    
     ### 4. GUIDA DI STILE E STRUTTURA PER TIPOLOGIA DI ARTICOLO ({topic_type.upper()})
     {format_rules}
 
@@ -898,7 +901,7 @@ def drafter_node(state: BloggerState):
     # ==========================================
     max_retries = 3
     draft_text = ""
-    min_words = 500
+    min_words = 550
     
     for attempt in range(max_retries):
         if attempt > 0:
@@ -1089,12 +1092,10 @@ def human_in_the_loop_node(state: BloggerState) -> Command[Literal["kg_updater",
         update_data = {
             "human_feedback": feedback, 
             "tool_call_count": 0,
-            **base_reset
         }
     elif goto_node == "drafter":
         update_data = {
             "human_feedback": feedback, 
-            **base_reset
         }
 
     return Command(update=update_data, goto=goto_node)
@@ -1232,7 +1233,7 @@ def kg_updater_node(state: BloggerState):
         
     # ==========================================
     # 5. GESTIONE DELLA CODA EDITORIALE
-    # ==========================================
+    # ========================================
     active_plan = kg_manager.get_active_plan_status()
     
     if active_plan and len(active_plan) > 0:
